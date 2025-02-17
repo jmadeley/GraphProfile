@@ -1,8 +1,12 @@
+import math
+import os
 import tkinter as tk
 from collections import namedtuple
 from tkinter import filedialog
 import xml.etree.ElementTree as ET
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
 import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import CoolingModel
@@ -17,14 +21,15 @@ def browse_file():
     )
 
     if filename:
+        basename = os.path.basename(filename)
         try:
             xml_tree = ET.parse(filename)
             graph_profile()
-            status_label.config(text="Profile loaded successfully.")
+            status_label.config(text=f"Profile '{basename}'\n loaded successfully.")
         except ET.ParseError as e:
-            status_label.config(text=f"Error parsing XML: {e}")
+            status_label.config(text=f"Error parsing XML in '{basename}':\n {e}")
         except Exception as e:
-            status_label.config(text=f"An error occurred: {e}")
+            status_label.config(text=f"An error occurred in '{basename}':\n {e}")
     else:
         status_label.config(text="No file selected")
 
@@ -53,7 +58,11 @@ def plot_profile(xml_tree, ax):
         root = xml_tree.getroot()
         temperature_segments = extract_temperature_segments(root)
         heating_pressure_segments = extract_pressure_segments(root, "HeatingSwitchPoints/VacuumSwitchPoint")
+        if len(temperature_segments) == 0:
+            raise ValueError("No HeatingSwitchPoints found.")
         cooling_pressure_segments = extract_pressure_segments(root, "CoolingSwitchPoints/VacuumSwitchPoint")
+        if len(cooling_pressure_segments) == 0:
+            raise ValueError("No CoolingSwitchPoints found.")
         modifiers = extract_modifiers(root, "Modifiers")
         times, temperatures = calculate_heating_segments(temperature_segments)
         cooling_times, cooling_temperatures = CoolingModel.get_cooling_curves(
@@ -69,18 +78,29 @@ def plot_profile(xml_tree, ax):
         ax[0].set_title("Temperatures")
         ax[0].set_xlabel("Time (hours)")
         ax[0].set_ylabel("Temperature (Celsius)")
-        ax[0].set_ylim(0, 1600)
+        ax[0].set_ylim(0, 1500)
         ax[0].set_xlim(xmin=0)
-        ax[0].grid(True)
+        ax[0].yaxis.set_major_locator(ticker.MultipleLocator(500))
+        ax[0].yaxis.set_minor_locator(ticker.MultipleLocator(100))
+        ax[0].xaxis.set_major_locator(ticker.MultipleLocator(5))
+        ax[0].xaxis.set_minor_locator(ticker.MultipleLocator(1))
+        ax[0].grid(which='major', linestyle='-', linewidth=1.5)  # Thicker major grid lines
+        ax[0].grid(which='minor', linestyle='-', linewidth=0.5)
 
         ax[1].clear()
-        ax[1].set_xlim(auto=True)  # Reset x-axis limits
+#        ax[1].set_xlim(auto=True)  # Reset x-axis limits
         ax[1].set_title("Pressures")
         ax[1].set_xlabel("Time (hours)")
         ax[1].set_ylabel("Pressure (Torr)")
-        ax[1].set_xlim(xmin=0)
+        ax[1].yaxis.set_major_locator(ticker.MultipleLocator(50))
+        ax[1].yaxis.set_minor_locator(ticker.MultipleLocator(10))
+        ax[1].xaxis.set_major_locator(ticker.MultipleLocator(5))
+        ax[1].xaxis.set_minor_locator(ticker.MultipleLocator(1))
+        ax[1].grid(which='major', linestyle='-', linewidth=1.5)  # Thicker major grid lines
+        ax[1].grid(which='minor', linestyle='-', linewidth=0.5)        # Ensure y-axis tick labels are visible
+        plt.setp(ax[1].get_yticklabels(), visible=True)
 
-        ax[1].grid(True)
+
 
         pressure_times, pressures = calculate_pressure_graph(
             heating_pressure_segments, cooling_pressure_segments, times, temperatures
@@ -89,7 +109,9 @@ def plot_profile(xml_tree, ax):
         # Synchronize x-axis limits and ticks
         ax[1].set_xlim(ax[0].get_xlim())  # Set the same x-axis limits
         ax[1].set_xticks(ax[0].get_xticks())  # Set the same x-axis ticks
-
+        ax[1].set_xlim(0, max(pressure_times))
+        upper_y_limit = round_up_to_nearest_n(max(pressures)+10, 50)
+        ax[1].set_ylim(0, upper_y_limit)
         plt.tight_layout()
         ax[1].relim()  # Recalculate limits
         ax[1].autoscale_view()  # Adjust the view
@@ -99,6 +121,9 @@ def plot_profile(xml_tree, ax):
         ax[1].clear()
         raise
 
+def round_up_to_nearest_n(number, n):
+    """Round up the given number to the nearest n."""
+    return math.ceil(number / n) * n
 
 def get_xml_value(root, tag_name):
     """Retrieve the text value of a specified XML tag."""
@@ -259,7 +284,7 @@ def calculate_pressure_graph(heating_segments, cooling_segments, times, temperat
 
 # Main GUI setup
 root = tk.Tk()
-root.title("Profile Viewer V1.0")
+root.title("Profile Viewer V0.9")
 
 # File browsing button
 browse_button = tk.Button(root, text="Browse for Profile", command=browse_file)
