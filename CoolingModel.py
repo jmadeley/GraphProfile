@@ -98,6 +98,8 @@ def get_monotonic_curve(x_list, y_list, is_increasing_y):
         y_last = y_list[0]
         for x, y in zip(x_list, y_list):
             if y >= y_last:
+                if y == y_last:
+                    y = y + 0.0001
                 x_out.append(x)
                 y_out.append(y)
                 y_last = y
