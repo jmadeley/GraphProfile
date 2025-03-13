@@ -3,18 +3,20 @@ import os
 import tkinter as tk
 from collections import namedtuple
 from tkinter import filedialog
-import xml.etree.ElementTree as ET
+import tkinter.messagebox as messagebox
+
+from typing import Optional
+
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
-import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import CoolingModel
 
 
 def browse_file():
     """Open a file dialog to select an XML profile file and parse it."""
-    global xml_tree
+    #global xml_tree
     filename = filedialog.askopenfilename(
         title="Select Profile XML File",
         filetypes=(("XML files", "*.profile"), ("All files", "*.*"))
@@ -24,19 +26,20 @@ def browse_file():
         basename = os.path.basename(filename)
         try:
             xml_tree = ET.parse(filename)
-            graph_profile()
+            graph_profile(xml_tree)
             status_label.config(text=f"Profile '{basename}'\n loaded successfully.")
         except ET.ParseError as e:
             status_label.config(text=f"Error parsing XML in '{basename}':\n {e}")
+            messagebox.showerror("XML Parse Error", f"Error parsing XML in '{basename}':\n {e}")
         except Exception as e:
             status_label.config(text=f"An error occurred in '{basename}':\n {e}")
+            messagebox.showerror("Error", f"An error occurred in '{basename}':\n {e}")
     else:
         status_label.config(text="No file selected")
 
 
-def graph_profile():
+def graph_profile(xml_tree):
     """Graph the profile data from the parsed XML."""
-    global xml_tree
 
     if xml_tree is not None:
         try:
@@ -52,81 +55,132 @@ def graph_profile():
         status_label.config(text="No XML file loaded.")
 
 
-def plot_profile(xml_tree, ax):
-    """Plot the temperature and pressure profiles."""
+import xml.etree.ElementTree as ET
+from matplotlib.axes import Axes
+from typing import List
+
+def plot_profile(xml_tree: ET.ElementTree, ax: List[Axes]) -> None:
+    """
+    Plot the temperature and pressure profiles extracted from an XML tree.
+
+    :param xml_tree: Parsed XML tree containing profile data.
+    :param ax: List of Matplotlib Axes to plot the temperature and pressure.
+    """
     try:
         root = xml_tree.getroot()
         temperature_segments = extract_temperature_segments(root)
+        validate_segments(temperature_segments, "HeatingSwitchPoints")
+
         heating_pressure_segments = extract_pressure_segments(root, "HeatingSwitchPoints/VacuumSwitchPoint")
-        if len(temperature_segments) == 0:
-            raise ValueError("No HeatingSwitchPoints found.")
         cooling_pressure_segments = extract_pressure_segments(root, "CoolingSwitchPoints/VacuumSwitchPoint")
-        if len(cooling_pressure_segments) == 0:
-            raise ValueError("No CoolingSwitchPoints found.")
+        validate_segments(cooling_pressure_segments, "CoolingSwitchPoints")
+
         modifiers = extract_modifiers(root, "Modifiers")
         times, temperatures = calculate_heating_segments(temperature_segments)
+
         cooling_times, cooling_temperatures = CoolingModel.get_cooling_curves(
             temperatures[-1], modifiers.end_temperature, times[-1], modifiers.max_active_cooling_temp
         )
         times.extend(cooling_times)
         temperatures.extend(cooling_temperatures)
 
-        ax[0].clear()
-        ax[0].set_xlim(auto=True)  # Reset x-axis limits
-        plt.setp(ax[0].get_xticklabels(), visible=True)
-        ax[0].plot(times, temperatures)
-        ax[0].set_title("Temperatures")
-        ax[0].set_xlabel("Time (hours)")
-        ax[0].set_ylabel("Temperature (Celsius)")
-        ax[0].set_ylim(0, 1500)
-        ax[0].set_xlim(xmin=0)
-        ax[0].yaxis.set_major_locator(ticker.MultipleLocator(500))
-        ax[0].yaxis.set_minor_locator(ticker.MultipleLocator(100))
-        ax[0].xaxis.set_major_locator(ticker.MultipleLocator(5))
-        ax[0].xaxis.set_minor_locator(ticker.MultipleLocator(1))
-        ax[0].grid(which='major', linestyle='-', linewidth=1.5)  # Thicker major grid lines
-        ax[0].grid(which='minor', linestyle='-', linewidth=0.5)
+        # Calculate total time
+        total_time = calculate_total_time(times)
 
-        ax[1].clear()
-#        ax[1].set_xlim(auto=True)  # Reset x-axis limits
-        ax[1].set_title("Pressures")
-        ax[1].set_xlabel("Time (hours)")
-        ax[1].set_ylabel("Pressure (Torr)")
-        ax[1].yaxis.set_major_locator(ticker.MultipleLocator(50))
-        ax[1].yaxis.set_minor_locator(ticker.MultipleLocator(10))
-        ax[1].xaxis.set_major_locator(ticker.MultipleLocator(5))
-        ax[1].xaxis.set_minor_locator(ticker.MultipleLocator(1))
-        ax[1].grid(which='major', linestyle='-', linewidth=1.5)  # Thicker major grid lines
-        ax[1].grid(which='minor', linestyle='-', linewidth=0.5)        # Ensure y-axis tick labels are visible
-        plt.setp(ax[1].get_yticklabels(), visible=True)
+        plot_temperature_profile(ax[0], times, temperatures, total_time)
+        plot_pressure_profile(ax[1], heating_pressure_segments, cooling_pressure_segments, times, temperatures)
 
-
-
-        pressure_times, pressures = calculate_pressure_graph(
-            heating_pressure_segments, cooling_pressure_segments, times, temperatures
-        )
-        ax[1].plot(pressure_times, pressures)
-        # Synchronize x-axis limits and ticks
-        ax[1].set_xlim(ax[0].get_xlim())  # Set the same x-axis limits
-        ax[1].set_xticks(ax[0].get_xticks())  # Set the same x-axis ticks
-        ax[1].set_xlim(0, max(pressure_times))
-        upper_y_limit = round_up_to_nearest_n(max(pressures)+10, 50)
-        ax[1].set_ylim(0, upper_y_limit)
-        plt.tight_layout()
-        ax[1].relim()  # Recalculate limits
-        ax[1].autoscale_view()  # Adjust the view
         fig.canvas.draw()
+
     except Exception as e:
-        ax[0].clear()
-        ax[1].clear()
-        raise
+        handle_plotting_exception(ax, e)
+
+def validate_segments(segments: List, tag: str) -> None:
+    """Validate the presence of segments."""
+    if not segments:
+        raise ValueError(f"No {tag} found.")
+
+def calculate_total_time(times: List) -> float:
+    """Calculate the total time of the profile."""
+    return times[-1] if times else 0
+
+def plot_temperature_profile(ax: Axes, times: List, temperatures: List, total_time: float) -> None:
+    """Plot the temperature profile on the provided Axes."""
+    ax.clear()
+    ax.set_xlim(auto=True)
+    ax.plot(times, temperatures, label='Temperature (°C)')
+    ax.set_title("Temperatures")
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel("Temperature (Celsius)")
+    ax.set_ylim(0, 1500)
+    ax.set_xlim(xmin=0)
+    configure_temperature_axis(ax)
+    ax.text(0.5, 0.05, f'Estimated Time: {total_time:.1f} hours', transform=ax.transAxes,
+            fontsize=10, verticalalignment='bottom', horizontalalignment='center', backgroundcolor='white')
+
+def configure_temperature_axis(ax: Axes) -> None:
+    """Configure the appearance and grid settings of the temperature axis."""
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(500))
+    ax.yaxis.set_minor_locator(ticker.MultipleLocator(100))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(5))
+    ax.xaxis.set_minor_locator(ticker.MultipleLocator(1))
+    ax.grid(which='major', linestyle='-', linewidth=1.5)
+    ax.grid(which='minor', linestyle='-', linewidth=0.5)
+    plt.setp(ax.get_xticklabels(), visible=True)
+
+def plot_pressure_profile(ax: Axes, heating_segments, cooling_segments, times, temperatures) -> None:
+    """Plot the pressure profile on the provided Axes."""
+    ax.clear()
+    ax.set_title("Pressures")
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel("Pressure (Torr)")
+    configure_pressure_axis(ax)
+
+    pressure_times, pressures = calculate_pressure_graph(
+        heating_segments, cooling_segments, times, temperatures
+    )
+    ax.plot(pressure_times, pressures)
+    synchronize_x_axis(ax, pressures, pressure_times)
+
+def configure_pressure_axis(ax: Axes) -> None:
+    """Configure the appearance and grid settings of the pressure axis."""
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(50))
+    ax.yaxis.set_minor_locator(ticker.MultipleLocator(10))
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(5))
+    ax.xaxis.set_minor_locator(ticker.MultipleLocator(1))
+    ax.grid(which='major', linestyle='-', linewidth=1.5)
+    ax.grid(which='minor', linestyle='-', linewidth=0.5)
+    plt.setp(ax.get_yticklabels(), visible=True)
+
+def synchronize_x_axis(ax: Axes, pressures: List, pressure_times: List) -> None:
+    """Synchronize x-axis limits and ticks between temperature and pressure plots."""
+    ax.set_xlim(ax.get_xlim())  # Set the same x-axis limits
+    ax.set_xticks(ax.get_xticks())  # Set the same x-axis ticks
+    ax.set_xlim(0, max(pressure_times))
+    upper_y_limit = round_up_to_nearest_n(max(pressures)+10, 50)
+    ax.set_ylim(0, upper_y_limit)
+    plt.tight_layout()
+    ax.relim()  # Recalculate limits
+    ax.autoscale_view()
+
+def handle_plotting_exception(ax: List[Axes], e: Exception) -> None:
+    """Handle exceptions during plotting by clearing the axes and raising the error."""
+    ax[0].clear()
+    ax[1].clear()
+    raise e
 
 def round_up_to_nearest_n(number, n):
     """Round up the given number to the nearest n."""
     return math.ceil(number / n) * n
 
-def get_xml_value(root, tag_name):
-    """Retrieve the text value of a specified XML tag."""
+def get_xml_value(root: ET.Element, tag_name: str) -> Optional[str]:
+    """
+    Retrieve the text value of a specified XML tag.
+
+    :param root: The root element of the XML tree.
+    :param tag_name: The name of the tag to search for.
+    :return: The text value of the tag, or None if the tag is not found.
+    """
     tag = root.find(tag_name)
     return tag.text if tag is not None else None
 
@@ -209,15 +263,6 @@ def calculate_heating_segments(segments):
             temperatures.append(temperature)
     return times, temperatures
 
-
-def calculate_pressure_graph(heating_segments, cooling_segments, times, temperatures):
-    """Calculate the pressure graph based on heating and cooling segments."""
-    pressure_times, pressures = [], []
-    heating_interpolator = CoolingModel.get_reverse_interpolator(times, temperatures, True)
-    cooling_interpolator = CoolingModel.get_reverse_interpolator(times, temperatures, False)
-    max_temperature = max(temperatures)
-    last_pressure, last_time = 0.0, 0.25
-
 class PressureGraph:
     """Class to encapsulate pressure-related data."""
 
@@ -227,21 +272,24 @@ class PressureGraph:
         self.last_pressure = 0.0
         self.last_time = 0.0
 
-    def add_pressure_plateau(self, pressure, time):
+    def add_pressure_plateau(self, pressure, time, end_of_heating=False):
         """Add a pressure plateau to the pressures and pressure_times lists."""
-        SLEW = 300
+        slew = 300
         pressure = float(pressure)
-        if pressure > 20:
-            time_to_repressurize = abs( (pressure-self.last_pressure) / SLEW)
+        if end_of_heating:
+            time_to_pressurize = 0
+        elif pressure > 20:
+            time_to_pressurize = abs( (pressure-self.last_pressure) / slew)
         else:
-            time_to_repressurize = 0
+            time_to_pressurize = 0
         if self.last_time > time:
             raise Exception("Insufficient time to adjust pressure between pressure changes.")
         time = float(max(time,self.last_time))
-        self.pressures.extend([self.last_pressure, self.last_pressure])
-        self.pressure_times.extend([self.last_time, time])
+        if time-self.last_time > 0.001:
+            self.pressures.extend([self.last_pressure, self.last_pressure])
+            self.pressure_times.extend([self.last_time, time])
         self.last_pressure = float(pressure)
-        self.last_time = time + time_to_repressurize
+        self.last_time = time + time_to_pressurize
 
     def get_last_time(self):
         """Return the last time."""
@@ -259,10 +307,11 @@ def calculate_pressure_graph(heating_segments, cooling_segments, times, temperat
 
     for segment in heating_segments:
         if segment.temperature > max_temperature:
-            graph.add_pressure_plateau(segment.pressure, heating_interpolator.y[-1])
+            graph.add_pressure_plateau(segment.pressure, heating_interpolator.y[-1], True)
             break
         time = heating_interpolator(segment.temperature)
         if time < 0.25:
+            graph.add_pressure_plateau(segment.pressure, 0.25)
             continue
         pressure = segment.pressure
         graph.add_pressure_plateau(pressure, time)
@@ -284,7 +333,7 @@ def calculate_pressure_graph(heating_segments, cooling_segments, times, temperat
 
 # Main GUI setup
 root = tk.Tk()
-root.title("Profile Viewer V0.9")
+root.title("Profile Viewer V0.91")
 
 # File browsing button
 browse_button = tk.Button(root, text="Browse for Profile", command=browse_file)
