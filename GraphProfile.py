@@ -13,6 +13,9 @@ import matplotlib.ticker as ticker
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import CoolingModel
 
+import xml.etree.ElementTree as ET
+from matplotlib.axes import Axes
+from typing import List
 
 def browse_file():
     """Open a file dialog to select an XML profile file and parse it."""
@@ -43,7 +46,6 @@ def graph_profile(xml_tree):
 
     if xml_tree is not None:
         try:
-            fig.canvas.draw()
             profile_name = get_xml_value(xml_tree, 'Name')
             fig.suptitle(profile_name)
             plot_profile(xml_tree, ax)
@@ -55,9 +57,6 @@ def graph_profile(xml_tree):
         status_label.config(text="No XML file loaded.")
 
 
-import xml.etree.ElementTree as ET
-from matplotlib.axes import Axes
-from typing import List
 
 def plot_profile(xml_tree: ET.ElementTree, ax: List[Axes]) -> None:
     """
